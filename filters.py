@@ -9,6 +9,7 @@ from sklearn.svm import LinearSVC
 from sklearn.svm import SVC
 import time
 import pickle
+from scipy.ndimage.measurements import label
 from extractor import Extractor
 
 class Filter():
@@ -24,13 +25,18 @@ class Filter():
         self.ex = Extractor()
         self.test_clf_image_paths = glob("./clf_test_image/*.*")
         self.test_video_images_path = glob("./video_images_1/*.*")
+        self.sliding_box_param_level = [{'size': 25, 'x_step': 12.5, 'y_step': 12.5, 'portion':1/4},#level 0
+                                        {'size': 50, 'x_step': 25, 'y_step': 25,'portion':2/4},
+                                        {'size': 100, 'x_step': 50, 'y_step': 50,'portion':2/4},
+                                        {'size': 200, 'x_step': 100, 'y_step': 100,'portion':1}] #level 3
+        self.heatmap_threshold = 3
 
     def predict_one_image(self,image):
         resize = cv2.resize(image,(self.img_col,self.img_row))
         X = self.ex.extract_features_one_image(resize)
         X = X.astype(np.float64)
-        X_scaled = self.scaler.transform(X)
-        return self.svc.predict([X_scaled])
+        X_scaled = self.scaler.transform(X.reshape(1, -1))
+        return self.svc.predict(X_scaled)
 
     def predict_batch(self,image_path):
         for path in image_path:
@@ -41,16 +47,131 @@ class Filter():
             plt.show()
 
     def draw_one_box(self,image,size,centroid):
-        topLeft = (int(centroid[1] - size / 2), int(centroid[0] - size / 2))
-        bottomLeft = (int(centroid[1] - size / 2), int(centroid[0] + size / 2))
-        topRight = (int(centroid[1] + size / 2), int(centroid[0] - size / 2))
-        bottomRight = (int(centroid[1] + size / 2), int(centroid[0] + size / 2))
+        topLeft = (int(centroid[0] - size / 2), int(centroid[1] - size / 2))
+        bottomLeft = (int(centroid[0] - size / 2), int(centroid[1] + size / 2))
+        topRight = (int(centroid[0] + size / 2), int(centroid[1] - size / 2))
+        bottomRight = (int(centroid[0] + size / 2), int(centroid[1] + size / 2))
         C = (0, 255, 0)
         #cv2.line(image, topLeft, bottomLeft, C, 2)
         #cv2.line(image, bottomLeft, bottomRight, C, 2)
         #cv2.line(image, bottomRight, topRight, C, 2)
         #cv2.line(image, topLeft, topRight, C, 2)
         cv2.rectangle(image, bottomLeft, topRight, C, 4)
+
+    def draw_boxes(self,image,size,centroids):
+        for centroid in centroids:
+            self.draw_one_box(image,size,centroid)
+
+    def sliding_box_single_level(self,image,size,x_step,y_step,portion):
+        # Portion is how much the algorithm is to be run on the image.
+        # Eg: if portion = 1/4, only the top 1/4 portions of the images are to be slidied
+        image_cropped = image[:int(image.shape[0]*portion),:]
+        pos_list = self.generate_box_pos(image_cropped.shape,size,x_step=x_step,y_step=y_step)
+        detected_true = []
+        for pos in pos_list:
+            topLeft = (int(pos[0] - size / 2), int(pos[1] - size / 2))
+            bottomLeft = (int(pos[0] - size / 2), int(pos[1] + size / 2))
+            topRight = (int(pos[0] + size / 2), int(pos[1] - size / 2))
+            bottomRight = (int(pos[0] + size / 2), int(pos[1] + size / 2))
+            image_boxed = image_cropped[topLeft[1]:bottomLeft[1],topLeft[0]:topRight[0]]
+            y_pred = self.predict_one_image(image_boxed)
+            if y_pred[0]:
+                detected_true.append(pos)
+        return detected_true
+
+    def sliding_box_multi_level(self,image,level = 2):
+        image_copy = np.copy(image)
+        y_offset = int(image_copy.shape[0]/2)
+        image_copy_cropped = image_copy[y_offset:,:]
+        centroids_and_sizes = [] # member element is a dictionary
+        if level != 'all':
+            if level > 3:
+                raise ValueError("Level cannot exceed {}".format(len(self.sliding_box_param_level)))
+            centroids = self.sliding_box_single_level(image_copy_cropped,**(self.sliding_box_param_level[level]))
+            centroids = np.array(centroids)
+            centroids[:, 1] = centroids[:, 1] + y_offset
+            kwargs = {"centroids":centroids,"size":self.sliding_box_param_level[level]["size"]}
+            centroids_and_sizes.append(kwargs)
+            self.draw_boxes(image_copy,**kwargs)
+        else:
+            for level in range(len(self.sliding_box_param_level)):
+                centroids = self.sliding_box_single_level(image_copy_cropped, **(self.sliding_box_param_level[level]))
+                centroids = np.array(centroids)
+                centroids[:, 1] = centroids[:, 1] + y_offset
+                kwargs = {"centroids": centroids, "size": self.sliding_box_param_level[level]["size"]}
+                centroids_and_sizes.append(kwargs)
+                self.draw_boxes(image_copy, **kwargs)
+        return image_copy, centroids_and_sizes
+
+    def generate_box_pos(self,image_shape,size,x_step,y_step):
+        x_min, x_max = 0, image_shape[1]
+        y_min, y_max = 0, image_shape[0]
+        pos = [x_min + int(size / 2), y_min + int(size / 2)]
+        pos_list = []
+        while True:
+            if pos[1] + int(size / 2) > y_max:
+                if pos_list[-1][1] + int(size / 2) != y_max:
+                    pos[1] = y_max - int(size / 2)
+                    continue
+                else:
+                    break
+            while True:
+                if pos[0] + int(size / 2) > x_max:
+                    if pos_list[-1][0] + int(size / 2) != x_max:
+                        pos[0] = x_max - int(size / 2)
+                        pos_list.append(list(pos))
+                        pos[0] = x_min + int(size / 2)
+                        break
+                    else:
+                        pos[0] = x_min + int(size / 2)
+                        break
+                pos_list.append(list(pos))
+                pos[0] += x_step
+            pos[1] += y_step
+        return pos_list
+
+    def add_heat(self, image_shape, centroids_and_sizes):
+        heatmap = np.zeros(image_shape[:2])
+        # Iterate through list of bboxes
+        for i in range(len(centroids_and_sizes)):
+            centroids = centroids_and_sizes[i]["centroids"]
+            size = centroids_and_sizes[i]["size"]
+            for centroid in centroids:
+                topLeft = (int(centroid[0] - size / 2), int(centroid[1] - size / 2))
+                bottomLeft = (int(centroid[0] - size / 2), int(centroid[1] + size / 2))
+                topRight = (int(centroid[0] + size / 2), int(centroid[1] - size / 2))
+                bottomRight = (int(centroid[0] + size / 2), int(centroid[1] + size / 2))
+                heatmap[topLeft[1]:bottomLeft[1], topLeft[0]:topRight[0]] += 1
+        # Return updated heatmap
+        return heatmap
+
+    def apply_heat_threshold(self,heatmap):
+        heatmap_copy = np.zeros_like(heatmap)
+        heatmap_copy[heatmap >= self.heatmap_threshold] = 1
+        return heatmap_copy
+
+    def draw_final_bbox(self,original_image, heatmap):
+        original_image_copy = np.copy(original_image)
+        labels = label(heatmap)
+        print(labels[1], 'cars found')
+        for car_number in range(1, labels[1] + 1):
+            # Find pixels with each car_number label value
+            nonzero = (labels[0] == car_number).nonzero()
+            # Identify x and y values of those pixels
+            nonzeroy = np.array(nonzero[0])
+            nonzerox = np.array(nonzero[1])
+            # Define a bounding box based on min/max x and y
+            bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
+            # Draw the box on the image
+            cv2.rectangle(original_image_copy, bbox[0], bbox[1], (0, 0, 255), 6)
+        return original_image_copy
+
+    def pipepine(self,image):
+        image_res, centroids_and_sizes = self.sliding_box_multi_level(image, level='all')
+        heatmap = self.add_heat(image.shape, centroids_and_sizes)
+        heatmap = self.apply_heat_threshold(heatmap)
+        final_image = self.draw_final_bbox(image, heatmap)
+        return final_image
 
     def extract_half_image_hog(self, image):
         image_cropped = np.copy(image[-int(image.shape[0] / 2):, :])
