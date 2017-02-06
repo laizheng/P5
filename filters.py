@@ -29,14 +29,16 @@ class Filter():
         self.sliding_box_param_level = [
             #{'size': 25, 'x_step': 12.5, 'y_step': 12.5, 'portion': 1 / 4},
             #{'size': 50, 'x_step': 25, 'y_step': 25, 'portion': 2 / 4},
-            {'size': 100, 'x_step': 50, 'y_step': 50, 'portion': 0.5},
-            {'size': 120, 'x_step': 60, 'y_step': 60, 'portion': 0.6},
-            {'size': 140, 'x_step': 70, 'y_step': 70, 'portion': 0.7},
-            {'size': 160, 'x_step': 80, 'y_step': 80, 'portion': 0.8},
-            {'size': 200, 'x_step': 100, 'y_step': 100, 'portion': 0.9}
+            #{'size': 80, 'x_step': 40, 'y_step': 40, 'portion': 0.5},
+            {'size': 120, 'x_step': 0.3*120, 'y_step': 0.3*120, 'portion': 0.6},
+            {'size': 140, 'x_step': 0.3*140, 'y_step': 0.3*140, 'portion': 0.7},
+            {'size': 160, 'x_step': 0.3*160, 'y_step': 0.3*160, 'portion': 0.8},
         ]
-        self.heatmap_threshold = 1
+        self.heatmap_threshold_single_frame = 2
+        self.heatmap_threshold_multi_frame = 10
         self.font = cv2.FONT_HERSHEY_COMPLEX
+        self.heatmap_history = []
+        self.heatmap_latency = 10
 
     def resetDiag(self):
         self.mainDiagScreen = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -75,7 +77,7 @@ class Filter():
         X = self.ex.extract_features_one_image(resize)
         X = X.astype(np.float64)
         X_scaled = self.scaler.transform(X.reshape(1, -1))
-        return self.svc.predict(X_scaled)
+        return self.svc.predict(X_scaled), self.svc.decision_function(X_scaled)
 
     def predict_batch(self,image_path):
         for path in image_path:
@@ -113,15 +115,15 @@ class Filter():
             topRight = (int(pos[0] + size / 2), int(pos[1] - size / 2))
             bottomRight = (int(pos[0] + size / 2), int(pos[1] + size / 2))
             image_boxed = image_cropped[topLeft[1]:bottomLeft[1],topLeft[0]:topRight[0]]
-            y_pred = self.predict_one_image(image_boxed)
-            if y_pred[0]:
+            y_pred, conf = self.predict_one_image(image_boxed)
+            if y_pred[0] and conf >=0.2:
                 detected_true.append(pos)
         return detected_true
 
     def sliding_box_multi_level(self,image,level = 2):
         image_copy = np.copy(image)
         y_offset = int(image_copy.shape[0]/2)
-        image_copy_cropped = image_copy[y_offset:,:]
+        image_copy_cropped = np.copy(image_copy[y_offset:,:])
         centroids_and_sizes = [] # member element is a dictionary
         if level != 'ALL':
             if level > 3:
@@ -185,9 +187,9 @@ class Filter():
         # Return updated heatmap
         return heatmap
 
-    def apply_heat_threshold(self,heatmap):
+    def apply_heat_threshold(self,heatmap,threshold):
         heatmap_copy = np.zeros_like(heatmap)
-        heatmap_copy[heatmap >= self.heatmap_threshold] = 1
+        heatmap_copy[heatmap >= threshold] = 1
         return heatmap_copy
 
     def draw_final_bbox(self,original_image, heatmap):
@@ -211,19 +213,32 @@ class Filter():
         self.diag1 = image_res
         heatmap = self.add_heat(image.shape, centroids_and_sizes)
         self.diag2 = heatmap
-        heatmap = self.apply_heat_threshold(heatmap)
+        heatmap = self.apply_heat_threshold(heatmap,self.heatmap_threshold_single_frame)
         self.diag3 = heatmap
+        heatmap = self.process_heatmap_history(heatmap)
+        heatmap = self.apply_heat_threshold(heatmap, self.heatmap_threshold_multi_frame)
         final_image, num_car_found = self.draw_final_bbox(image, heatmap)
         self.mainDiagScreen = final_image
         self.diagScreenUpdate()
         return self.diagScreen
 
+    def process_heatmap_history(self,heatmap):
+        if len(self.heatmap_history)>=10:
+            self.heatmap_history.pop(0)
+            self.heatmap_history.append(heatmap)
+        else:
+            self.heatmap_history.append(heatmap)
+        heatmap_aggregated = np.array(self.heatmap_history)
+        heatmap_aggregated = np.sum(heatmap_aggregated,axis=0)
+        if len(self.heatmap_history)==10:
+            return heatmap_aggregated
+        else:
+            return np.zeros_like(heatmap)
+
     def extract_half_image_hog(self, image):
         image_cropped = np.copy(image[-int(image.shape[0] / 2):, :])
         hog_features = self.ex.get_hog_features_multi_channels(
-            image_cropped, orient=self.ex.hog_orient,
-            pix_per_cell=self.ex.hog_pix_per_cell,
-            cell_per_block=self.ex.hog_cell_per_block,
+            image_cropped,
             hog_channel=self.ex.hog_hog_channel,
             feature_vec=False)
         pass
