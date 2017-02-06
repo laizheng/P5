@@ -11,6 +11,7 @@ import time
 import pickle
 from scipy.ndimage.measurements import label
 from extractor import Extractor
+from moviepy.editor import VideoFileClip
 
 class Filter():
     def __init__(self,model_file=None,scaler_file=None):
@@ -226,3 +227,8 @@ class Filter():
             hog_channel=self.ex.hog_hog_channel,
             feature_vec=False)
         pass
+
+    def toVideo(self, input_video_file_name, output_video_file_name):
+        clipInput = VideoFileClip(input_video_file_name)
+        clipOutput = clipInput.fl_image(self.pipepine)
+        clipOutput.write_videofile(output_video_file_name, audio=False)
