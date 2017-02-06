@@ -18,17 +18,21 @@ from sklearn.metrics import precision_score
 
 class Extractor():
     def __init__(self):
-        # car_pattern = "./labeled_data_smallset/vehicles_smallset/**/*.*"
-        # noncar_pattern = "./labeled_data_smallset/non-vehicles_smallset/**/*.*"
         car_pattern = "./labeled_data/vehicles/**/*.*"
         noncar_pattern = "./labeled_data/non-vehicles/**/*.*"
         self.car_paths = glob(car_pattern, recursive=True)
         self.noncar_paths = glob(noncar_pattern, recursive=True)
         self.hog_cspace = 'HLS'
-        self.hog_orient = 8
+        self.hog_orient = 9
         self.hog_pix_per_cell = 8
-        self.hog_cell_per_block = 2
-        self.hog_hog_channel = 2
+        self.hog_cell_per_block = 3
+        self.hog_hog_channel = 1
+
+    def use_small_set(self):
+        car_pattern = "./labeled_data_smallset/vehicles_smallset/**/*.*"
+        noncar_pattern = "./labeled_data_smallset/non-vehicles_smallset/**/*.*"
+        self.car_paths = glob(car_pattern, recursive=True)
+        self.noncar_paths = glob(noncar_pattern, recursive=True)
 
     def color_hist(self, img, nbins=32, bins_range=(0, 256)):
         # Compute the histogram of the RGB channels separately
@@ -49,33 +53,38 @@ class Extractor():
         # Return the feature vector
         return features
 
-    def get_hog_features_one_channel(self, img, orient=9, pix_per_cell=8, cell_per_block=2, vis=False,
-                                     feature_vec=True):
+    def get_hog_features_one_channel(self, img, vis=False, feature_vec=True):
+        orient = self.hog_orient
+        pix_per_cell = self.hog_pix_per_cell
+        cell_per_block = self.hog_cell_per_block
         if vis:
-            features, hog_image = hog(img, orientations=orient, pixels_per_cell=(pix_per_cell, pix_per_cell),
-                                      cells_per_block=(cell_per_block, cell_per_block), visualise=vis, \
+            features, hog_image = hog(img,
+                                      orientations=orient,
+                                      pixels_per_cell=(pix_per_cell, pix_per_cell),
+                                      cells_per_block=(cell_per_block, cell_per_block),
+                                      visualise=vis,
                                       feature_vector=feature_vec)
             return features, hog_image
         else:
-            features = hog(img, orientations=orient, pixels_per_cell=(pix_per_cell, pix_per_cell),
-                           cells_per_block=(cell_per_block, cell_per_block), visualise=vis, \
+            features = hog(img,
+                           orientations=orient,
+                           pixels_per_cell=(pix_per_cell, pix_per_cell),
+                           cells_per_block=(cell_per_block, cell_per_block),
+                           visualise=vis,
                            feature_vector=feature_vec)
             return features
 
-    def get_hog_features_multi_channels(self, feature_image, orient=9,
-                                        pix_per_cell=8, cell_per_block=2, hog_channel=0, feature_vec=True):
+    def get_hog_features_multi_channels(self, feature_image, hog_channel=0, feature_vec=True):
         if hog_channel == 'ALL':
             hog_features = []
             for channel in range(feature_image.shape[2]):
                 hog_features.append(self.get_hog_features_one_channel(
                     feature_image[:, :, channel],
-                    orient, pix_per_cell, cell_per_block,
                     vis=False, feature_vec=feature_vec))
             hog_features = np.ravel(hog_features)
         else:
             hog_features = self.get_hog_features_one_channel(
-                feature_image[:, :, hog_channel], orient,
-                pix_per_cell, cell_per_block, vis=False, feature_vec=feature_vec)
+                feature_image[:, :, hog_channel], vis=False, feature_vec=feature_vec)
         return hog_features
 
     def extract_features_one_image(self, image):
@@ -93,20 +102,18 @@ class Extractor():
         else:
             feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        hog_features = self.get_hog_features_multi_channels(feature_image, orient=self.hog_orient, \
-                                                            pix_per_cell=self.hog_pix_per_cell, \
-                                                            cell_per_block=self.hog_cell_per_block, \
-                                                            hog_channel=self.hog_hog_channel)
-        bin_spatial_features = self.bin_spatial(image, size=(16, 16))
-        color_hist_features, _, _, _, _ = self.color_hist(image, nbins=32, bins_range=(0, 256))
-        color_hist_features = color_hist_features.astype(float)
-        return np.concatenate((color_hist_features, bin_spatial_features, hog_features))
+        hog_features = self.get_hog_features_multi_channels(feature_image, hog_channel=self.hog_hog_channel)
+        #bin_spatial_features = self.bin_spatial(image, size=(16, 16))
+        #color_hist_features, _, _, _, _ = self.color_hist(image, nbins=32, bins_range=(0, 256))
+        #color_hist_features = color_hist_features.astype(float)
+        #return np.concatenate((color_hist_features, bin_spatial_features, hog_features))
+        return hog_features
 
     def extract_features_batch(self, image_paths):
         print("Performing feature extrations... # of images to process = {}".format(len(image_paths)))
         print("Parameters: cspace={},orient={},"
               "pix_per_cell={},cell_per_block={},"
-              "hog_channel={}".format(self.hog_cspace, \
+              "hog_channel={}".format(self.hog_cspace,
                                       self.hog_orient,
                                       self.hog_pix_per_cell,
                                       self.hog_cell_per_block,
@@ -152,10 +159,11 @@ class Extractor():
         print("In test set, there are {} cars and {} noncars".format(len(y_test[y_test == 1]),
                                                                      len(y_test[y_test == 0])))
         print('Feature vector length:', len(X_train[0]))
-        # svc = LinearSVC(C=4)
         # The best parameters are {'gamma': 0.0001, 'C': 3.9810717055349731} with a score of 1.00
         # Train Accuracy of SVC =  0.9882
         # Test Accuracy of SVC =  0.9756
+
+        # svc = LinearSVC(C=4)
         svc = SVC(C=4, gamma=0.0001, verbose=True)
         t = time.time()
         print("Start Training...")

@@ -25,11 +25,49 @@ class Filter():
         self.ex = Extractor()
         self.test_clf_image_paths = glob("./clf_test_image/*.*")
         self.test_video_images_path = glob("./video_images_1/*.*")
-        self.sliding_box_param_level = [{'size': 25, 'x_step': 12.5, 'y_step': 12.5, 'portion':1/4},#level 0
-                                        {'size': 50, 'x_step': 25, 'y_step': 25,'portion':2/4},
-                                        {'size': 100, 'x_step': 50, 'y_step': 50,'portion':2/4},
-                                        {'size': 200, 'x_step': 100, 'y_step': 100,'portion':1}] #level 3
-        self.heatmap_threshold = 3
+        self.sliding_box_param_level = [
+            #{'size': 25, 'x_step': 12.5, 'y_step': 12.5, 'portion': 1 / 4},
+            #{'size': 50, 'x_step': 25, 'y_step': 25, 'portion': 2 / 4},
+            {'size': 100, 'x_step': 50, 'y_step': 50, 'portion': 0.5},
+            {'size': 120, 'x_step': 60, 'y_step': 60, 'portion': 0.6},
+            {'size': 140, 'x_step': 70, 'y_step': 70, 'portion': 0.7},
+            {'size': 160, 'x_step': 80, 'y_step': 80, 'portion': 0.8},
+            {'size': 200, 'x_step': 100, 'y_step': 100, 'portion': 0.9}
+        ]
+        self.heatmap_threshold = 1
+        self.font = cv2.FONT_HERSHEY_COMPLEX
+
+    def resetDiag(self):
+        self.mainDiagScreen = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diag1 = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diag2 = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diag3 = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diagScreen = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    def to3D(self, img):
+        if len(img.shape) < 3:
+            img = img / np.max(img) * 255
+            return np.dstack((img, img, img))
+        else:
+            return img
+
+    def diagScreenUpdate(self):
+        self.mainDiagScreen = self.to3D(self.mainDiagScreen)
+        self.diag1 = self.to3D(self.diag1)
+        self.diag2 = self.to3D(self.diag2)
+        self.diag3 = self.to3D(self.diag3)
+        # assemble the screen example
+        self.diagScreen = np.zeros((720, 1280, 3), dtype=np.uint8)
+        self.diagScreen[0:360, 0:640] = cv2.resize(self.mainDiagScreen, (640, 360), interpolation=cv2.INTER_AREA)
+
+        self.diagScreen[0:360, 640:1280] = cv2.resize(self.diag1, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[0:360, 640:1280], 'diag1', (30, 60), self.font, 1, (255, 0, 0), 2)
+
+        self.diagScreen[360:720, 0:640] = cv2.resize(self.diag2, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[360:720, 0:640], 'diag2', (30, 60), self.font, 1, (255, 0, 0), 2)
+
+        self.diagScreen[360:720, 640:1280] = cv2.resize(self.diag3, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[360:720, 640:1280], 'diag3', (30, 60), self.font, 1, (255, 0, 0), 2)
 
     def predict_one_image(self,image):
         resize = cv2.resize(image,(self.img_col,self.img_row))
@@ -84,7 +122,7 @@ class Filter():
         y_offset = int(image_copy.shape[0]/2)
         image_copy_cropped = image_copy[y_offset:,:]
         centroids_and_sizes = [] # member element is a dictionary
-        if level != 'all':
+        if level != 'ALL':
             if level > 3:
                 raise ValueError("Level cannot exceed {}".format(len(self.sliding_box_param_level)))
             centroids = self.sliding_box_single_level(image_copy_cropped,**(self.sliding_box_param_level[level]))
@@ -97,10 +135,11 @@ class Filter():
             for level in range(len(self.sliding_box_param_level)):
                 centroids = self.sliding_box_single_level(image_copy_cropped, **(self.sliding_box_param_level[level]))
                 centroids = np.array(centroids)
-                centroids[:, 1] = centroids[:, 1] + y_offset
-                kwargs = {"centroids": centroids, "size": self.sliding_box_param_level[level]["size"]}
-                centroids_and_sizes.append(kwargs)
-                self.draw_boxes(image_copy, **kwargs)
+                if len(centroids)>0:
+                    centroids[:, 1] = centroids[:, 1] + y_offset
+                    kwargs = {"centroids": centroids, "size": self.sliding_box_param_level[level]["size"]}
+                    centroids_and_sizes.append(kwargs)
+                    self.draw_boxes(image_copy, **kwargs)
         return image_copy, centroids_and_sizes
 
     def generate_box_pos(self,image_shape,size,x_step,y_step):
@@ -153,7 +192,7 @@ class Filter():
     def draw_final_bbox(self,original_image, heatmap):
         original_image_copy = np.copy(original_image)
         labels = label(heatmap)
-        print(labels[1], 'cars found')
+        num_car_found = labels[1]
         for car_number in range(1, labels[1] + 1):
             # Find pixels with each car_number label value
             nonzero = (labels[0] == car_number).nonzero()
@@ -164,14 +203,19 @@ class Filter():
             bbox = ((np.min(nonzerox), np.min(nonzeroy)), (np.max(nonzerox), np.max(nonzeroy)))
             # Draw the box on the image
             cv2.rectangle(original_image_copy, bbox[0], bbox[1], (0, 0, 255), 6)
-        return original_image_copy
+        return original_image_copy, num_car_found
 
     def pipepine(self,image):
-        image_res, centroids_and_sizes = self.sliding_box_multi_level(image, level='all')
+        image_res, centroids_and_sizes = self.sliding_box_multi_level(image, level='ALL')
+        self.diag1 = image_res
         heatmap = self.add_heat(image.shape, centroids_and_sizes)
+        self.diag2 = heatmap
         heatmap = self.apply_heat_threshold(heatmap)
-        final_image = self.draw_final_bbox(image, heatmap)
-        return final_image
+        self.diag3 = heatmap
+        final_image, num_car_found = self.draw_final_bbox(image, heatmap)
+        self.mainDiagScreen = final_image
+        self.diagScreenUpdate()
+        return self.diagScreen
 
     def extract_half_image_hog(self, image):
         image_cropped = np.copy(image[-int(image.shape[0] / 2):, :])
