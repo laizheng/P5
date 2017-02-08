@@ -15,6 +15,8 @@ from sklearn.model_selection import cross_val_score
 import pickle
 from sklearn.metrics import recall_score
 from sklearn.metrics import precision_score
+from sklearn.calibration import CalibratedClassifierCV
+import os
 
 class Extractor():
     def __init__(self):
@@ -27,6 +29,8 @@ class Extractor():
         self.hog_pix_per_cell = 8
         self.hog_cell_per_block = 3
         self.hog_hog_channel = 1
+        self.img_col = 64
+        self.img_row = 64
 
     def use_small_set(self):
         car_pattern = "./labeled_data_smallset/vehicles_smallset/**/*.*"
@@ -88,26 +92,30 @@ class Extractor():
         return hog_features
 
     def extract_features_one_image(self, image):
+        image = image[:, :, :3]
+        if np.max(image)>1:
+            image = image.astype(np.float32)/255.
         if self.hog_cspace != 'RGB':
             if self.hog_cspace == 'HSV':
-                feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                feature_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
             elif self.hog_cspace == 'LUV':
-                feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2LUV)
+                feature_image = cv2.cvtColor(image, cv2.COLOR_RGB2LUV)
             elif self.hog_cspace == 'HLS':
-                feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)
+                feature_image = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
             elif self.hog_cspace == 'YUV':
-                feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
+                feature_image = cv2.cvtColor(image, cv2.COLOR_RGB2YUV)
             elif self.hog_cspace == 'YCrCb':
-                feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
+                feature_image = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
+            else:
+                feature_image = image
         else:
-            feature_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                feature_image = image
         hog_features = self.get_hog_features_multi_channels(feature_image, hog_channel=self.hog_hog_channel)
-        #bin_spatial_features = self.bin_spatial(image, size=(16, 16))
-        #color_hist_features, _, _, _, _ = self.color_hist(image, nbins=32, bins_range=(0, 256))
-        #color_hist_features = color_hist_features.astype(float)
-        #return np.concatenate((color_hist_features, bin_spatial_features, hog_features))
-        return hog_features
+        bin_spatial_features = self.bin_spatial(image, size=(16, 16))
+        color_hist_features, _, _, _, _ = self.color_hist(image, nbins=32, bins_range=(0, 256))
+        color_hist_features = color_hist_features.astype(float)
+        return np.concatenate((color_hist_features, bin_spatial_features, hog_features))
+        #return hog_features
 
     def extract_features_batch(self, image_paths):
         print("Performing feature extrations... # of images to process = {}".format(len(image_paths)))
@@ -120,7 +128,7 @@ class Extractor():
                                       self.hog_hog_channel))
         features = []
         for path in image_paths:
-            image = cv2.imread(path)
+            image = mpimg.imread(path)
             features.append(self.extract_features_one_image(image))
         print("feature extraction concluded")
         return features
@@ -163,8 +171,9 @@ class Extractor():
         # Train Accuracy of SVC =  0.9882
         # Test Accuracy of SVC =  0.9756
 
-        # svc = LinearSVC(C=4)
-        svc = SVC(C=4, gamma=0.0001, verbose=True)
+        svc = LinearSVC(C=2)
+        svc = CalibratedClassifierCV(svc)
+        # svc = SVC(C=4, gamma=0.0001, verbose=True)
         t = time.time()
         print("Start Training...")
         svc.fit(X_train, y_train)

@@ -12,6 +12,8 @@ import pickle
 from scipy.ndimage.measurements import label
 from extractor import Extractor
 from moviepy.editor import VideoFileClip
+import os
+import shutil
 
 class Filter():
     def __init__(self,model_file=None,scaler_file=None):
@@ -30,22 +32,44 @@ class Filter():
             #{'size': 25, 'x_step': 12.5, 'y_step': 12.5, 'portion': 1 / 4},
             #{'size': 50, 'x_step': 25, 'y_step': 25, 'portion': 2 / 4},
             #{'size': 80, 'x_step': 40, 'y_step': 40, 'portion': 0.5},
-            {'size': 120, 'x_step': 0.3*120, 'y_step': 0.3*120, 'portion': 0.6},
-            {'size': 140, 'x_step': 0.3*140, 'y_step': 0.3*140, 'portion': 0.7},
-            {'size': 160, 'x_step': 0.3*160, 'y_step': 0.3*160, 'portion': 0.8},
+            {'size': 100, 'x_step': 0.3 * 100, 'y_step': 0.3 * 100, 'portion': 0.5},
+            {'size': 140, 'x_step': 0.3*140, 'y_step': 0.3*140, 'portion': 1},
+            {'size': 180, 'x_step': 0.3*180, 'y_step': 0.3*180, 'portion': 1},
+            #{'size': 200, 'x_step': 0.5*200, 'y_step': 0.5*200, 'portion': 1},
         ]
+        self.prob_threshold = 0.7
         self.heatmap_threshold_single_frame = 2
-        self.heatmap_threshold_multi_frame = 10
+        self.heatmap_threshold_multi_frame = 3
         self.font = cv2.FONT_HERSHEY_COMPLEX
         self.heatmap_history = []
-        self.heatmap_latency = 10
+        self.heatmap_latency = 5
+        self.hard_neg_num = 0
+        self.hard_neg_path = "./hard_neg_train/"
+        self.hard_neg_record = False
+        self.frame_num = 0
+
+    def hard_neg_init(self, hard_neg_record):
+        self.hard_neg_record = hard_neg_record
+        self.hard_neg_num = 0
+        if self.hard_neg_record:
+            self.prob_threshold = 0.5
+            if not os.path.isdir(self.hard_neg_path):
+                os.mkdir(self.hard_neg_path)
+            else:
+                print("removing {}".format(self.hard_neg_path))
+                shutil.rmtree(self.hard_neg_path)
+                os.mkdir(self.hard_neg_path)
+        else:
+            self.prob_threshold = 0.7
 
     def resetDiag(self):
         self.mainDiagScreen = np.zeros((100, 100, 3), dtype=np.uint8)
         self.diag1 = np.zeros((100, 100, 3), dtype=np.uint8)
         self.diag2 = np.zeros((100, 100, 3), dtype=np.uint8)
         self.diag3 = np.zeros((100, 100, 3), dtype=np.uint8)
-        self.diagScreen = np.zeros((720, 1280, 3), dtype=np.uint8)
+        self.diag4 = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diag5 = np.zeros((100, 100, 3), dtype=np.uint8)
+        self.diagScreen = np.zeros((720, 1920, 3), dtype=np.uint8)
 
     def to3D(self, img):
         if len(img.shape) < 3:
@@ -59,25 +83,34 @@ class Filter():
         self.diag1 = self.to3D(self.diag1)
         self.diag2 = self.to3D(self.diag2)
         self.diag3 = self.to3D(self.diag3)
+        self.diag4 = self.to3D(self.diag4)
+        self.diag5 = self.to3D(self.diag5)
         # assemble the screen example
-        self.diagScreen = np.zeros((720, 1280, 3), dtype=np.uint8)
+        self.diagScreen = np.zeros((720, 1920, 3), dtype=np.uint8)
         self.diagScreen[0:360, 0:640] = cv2.resize(self.mainDiagScreen, (640, 360), interpolation=cv2.INTER_AREA)
 
         self.diagScreen[0:360, 640:1280] = cv2.resize(self.diag1, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[0:360, 640:1280], 'Frame#={}'.format(self.frame_num), (30, 30), self.font, 1, (255, 0, 0), 2)
         cv2.putText(self.diagScreen[0:360, 640:1280], 'diag1', (30, 60), self.font, 1, (255, 0, 0), 2)
 
-        self.diagScreen[360:720, 0:640] = cv2.resize(self.diag2, (640, 360), interpolation=cv2.INTER_AREA)
-        cv2.putText(self.diagScreen[360:720, 0:640], 'diag2', (30, 60), self.font, 1, (255, 0, 0), 2)
+        self.diagScreen[0:360, 1280:1920] = cv2.resize(self.diag2, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[0:360, 1280:1920], 'diag2', (30, 60), self.font, 1, (255, 0, 0), 2)
 
-        self.diagScreen[360:720, 640:1280] = cv2.resize(self.diag3, (640, 360), interpolation=cv2.INTER_AREA)
-        cv2.putText(self.diagScreen[360:720, 640:1280], 'diag3', (30, 60), self.font, 1, (255, 0, 0), 2)
+        self.diagScreen[360:720, 0:640] = cv2.resize(self.diag3, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[360:720, 0:640], 'diag3', (30, 60), self.font, 1, (255, 0, 0), 2)
+
+        self.diagScreen[360:720, 640:1280] = cv2.resize(self.diag4, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[360:720, 640:1280], 'diag4', (30, 60), self.font, 1, (255, 0, 0), 2)
+
+        self.diagScreen[360:720, 1280:1920] = cv2.resize(self.diag5, (640, 360), interpolation=cv2.INTER_AREA)
+        cv2.putText(self.diagScreen[360:720, 1280:1920], 'diag5', (30, 60), self.font, 1, (255, 0, 0), 2)
 
     def predict_one_image(self,image):
         resize = cv2.resize(image,(self.img_col,self.img_row))
         X = self.ex.extract_features_one_image(resize)
         X = X.astype(np.float64)
         X_scaled = self.scaler.transform(X.reshape(1, -1))
-        return self.svc.predict(X_scaled), self.svc.decision_function(X_scaled)
+        return self.svc.predict_proba(X_scaled)
 
     def predict_batch(self,image_path):
         for path in image_path:
@@ -115,14 +148,18 @@ class Filter():
             topRight = (int(pos[0] + size / 2), int(pos[1] - size / 2))
             bottomRight = (int(pos[0] + size / 2), int(pos[1] + size / 2))
             image_boxed = image_cropped[topLeft[1]:bottomLeft[1],topLeft[0]:topRight[0]]
-            y_pred, conf = self.predict_one_image(image_boxed)
-            if y_pred[0] and conf >=0.2:
+            conf = self.predict_one_image(image_boxed)
+            if conf[0][1]>=self.prob_threshold:
                 detected_true.append(pos)
+                if self.hard_neg_record:
+                    toSave = cv2.resize(image_boxed,(self.img_col,self.img_row))
+                    mpimg.imsave(self.hard_neg_path + str(self.hard_neg_num) + ".png", toSave)
+                    self.hard_neg_num += 1
         return detected_true
 
     def sliding_box_multi_level(self,image,level = 2):
         image_copy = np.copy(image)
-        y_offset = int(image_copy.shape[0]/2)
+        y_offset = int(image_copy.shape[0]*0.5)
         image_copy_cropped = np.copy(image_copy[y_offset:,:])
         centroids_and_sizes = [] # member element is a dictionary
         if level != 'ALL':
@@ -216,10 +253,13 @@ class Filter():
         heatmap = self.apply_heat_threshold(heatmap,self.heatmap_threshold_single_frame)
         self.diag3 = heatmap
         heatmap = self.process_heatmap_history(heatmap)
+        self.diag4 = heatmap
         heatmap = self.apply_heat_threshold(heatmap, self.heatmap_threshold_multi_frame)
+        self.diag5 = heatmap
         final_image, num_car_found = self.draw_final_bbox(image, heatmap)
         self.mainDiagScreen = final_image
         self.diagScreenUpdate()
+        self.frame_num += 1
         return self.diagScreen
 
     def process_heatmap_history(self,heatmap):
@@ -243,7 +283,8 @@ class Filter():
             feature_vec=False)
         pass
 
-    def toVideo(self, input_video_file_name, output_video_file_name):
+    def toVideo(self, input_video_file_name, output_video_file_name, hard_neg_record=False):
+        self.hard_neg_init(hard_neg_record)
         clipInput = VideoFileClip(input_video_file_name)
         clipOutput = clipInput.fl_image(self.pipepine)
         clipOutput.write_videofile(output_video_file_name, audio=False)
