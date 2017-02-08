@@ -282,3 +282,66 @@ class Extractor():
         recall = precision_score(y_test, y_test_pred)
         print('precision Accuracy of SVC on test set = ', round(recall, 4))
         print('Test Accuracy of SVC = ', round(svc.score(X_test, y_test), 4))
+
+    def predict_one_image(self,image, svc, scaler):
+        resize = cv2.resize(image,(self.img_col,self.img_row))
+        X = self.extract_features_one_image(resize)
+        X = X.astype(np.float64)
+        X_scaled = scaler.transform(X.reshape(1, -1))
+        return svc.predict(X_scaled), svc.predict_proba(X_scaled)
+
+    def gen_prediction(self, model_file, scaler_file, n):
+        print("\n\n----------------Generate {} Samples for TP/FP/TN/FN-------------\n\n".format(n))
+        tp = []
+        fp = []
+        tn = []
+        fn = []
+        f_model = open(model_file, 'rb')
+        svc = pickle.load(f_model)
+        f_scaler = open(scaler_file, 'rb')
+        scaler = pickle.load(f_scaler)
+        for path in self.car_paths:
+            image = mpimg.imread(path)
+            pred , conf = self.predict_one_image(image, svc, scaler)
+            if pred[0]:
+                if len(tp) < n:
+                    tp.append((path,conf))
+            else:
+                if len(fn) < n:
+                    fn.append((path,conf))
+            if len(tp) >= n and len(fn) >=n:
+                break
+        for path in self.noncar_paths:
+            image = mpimg.imread(path)
+            pred , conf = self.predict_one_image(image, svc, scaler)
+            if pred[0]:
+                if len(fp) < n:
+                    fp.append((path,conf))
+            else:
+                if len(tn) < n:
+                    tn.append((path,conf))
+            if len(fp) >= n and len(tn) >=n:
+                break
+        f, axes = plt.subplots(4,n,figsize=(12,8))
+        for i in range(n):
+            axes[0][i].imshow(mpimg.imread(tp[i][0]))
+            axes[0][i].set_title("True+,Conf+={:.1f},Conf-={:.1f}".format(tp[i][1][0][1],tp[i][1][0][0]))
+            axes[0][i].set_xticks([])
+            axes[0][i].set_yticks([])
+        for i in range(n):
+            axes[1][i].imshow(mpimg.imread(tn[i][0]))
+            axes[1][i].set_title("True-,Conf+={:.1f},Conf-={:.1f}".format(tn[i][1][0][1],tn[i][1][0][0]))
+            axes[1][i].set_xticks([])
+            axes[1][i].set_yticks([])
+        for i in range(n):
+            axes[2][i].imshow(mpimg.imread(fp[i][0]))
+            axes[2][i].set_title("False+,Conf+={:.1f},Conf-={:.1f}".format(fp[i][1][0][1],fp[i][1][0][0]))
+            axes[2][i].set_xticks([])
+            axes[2][i].set_yticks([])
+        for i in range(n):
+            axes[3][i].imshow(mpimg.imread(fn[i][0]))
+            axes[3][i].set_title("False-,Conf+={:.1f},Conf-={:.1f}".format(fn[i][1][0][1],fn[i][1][0][0]))
+            axes[3][i].set_xticks([])
+            axes[3][i].set_yticks([])
+        plt.show()
+
